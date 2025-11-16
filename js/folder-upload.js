@@ -125,6 +125,9 @@
 
     async function handleFolderUpload(items) {
         try {
+            // 第一步：完整扫描文件夹结构，获取所有文件列表
+            updateUploadProgress(0, 0, '正在扫描文件夹结构...');
+            
             const files = [];
             const filePromises = [];
 
@@ -142,20 +145,30 @@
                 }
             }
 
-            // 等待所有文件处理完成
+            // 等待所有文件扫描完成
             await Promise.all(filePromises);
 
             if (files.length === 0) {
                 console.warn('未找到可上传的文件');
                 showMessage('未找到可上传的文件', 'warning');
+                hideUploadProgress();
                 return;
             }
 
-            // 显示上传进度提示
-            showUploadProgress(files.length);
+            // 第二步：按文件大小排序，先上传小文件，再上传大文件
+            // 这样可以更快看到进度，大文件在后台慢慢上传
+            files.sort((a, b) => a.file.size - b.file.size);
 
-            // 上传所有文件
-            await uploadFiles(files);
+            // 显示扫描结果
+            const totalSize = files.reduce((sum, f) => sum + f.file.size, 0);
+            const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
+            console.log(`扫描完成: 找到 ${files.length} 个文件，总大小 ${totalSizeMB}MB`);
+
+            // 显示上传进度提示
+            showUploadProgress(files.length, totalSizeMB);
+
+            // 第三步：按顺序逐个上传文件（不并行，避免卡顿）
+            await uploadFilesSequentially(files);
         } catch (error) {
             console.error('处理文件夹上传时出错:', error);
             showMessage('处理文件夹时出错: ' + error.message, 'error');
@@ -210,32 +223,50 @@
         });
     }
 
-    function showUploadProgress(totalFiles) {
-        // 尝试显示上传进度
-        // 这里可以创建一个进度提示元素
+    function showUploadProgress(totalFiles, totalSizeMB = '') {
+        // 移除已存在的进度条
+        const existing = document.getElementById('folder-upload-progress');
+        if (existing) {
+            existing.remove();
+        }
+
+        // 创建新的进度提示元素
         const progressDiv = document.createElement('div');
         progressDiv.id = 'folder-upload-progress';
         progressDiv.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.9);
             color: white;
             padding: 15px 20px;
             border-radius: 8px;
             z-index: 10000;
-            font-size: 14px;
+            font-size: 13px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            max-width: 400px;
+            line-height: 1.5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         `;
-        progressDiv.textContent = `准备上传 ${totalFiles} 个文件...`;
+        
+        const sizeText = totalSizeMB ? ` (${totalSizeMB}MB)` : '';
+        progressDiv.textContent = `准备上传 ${totalFiles} 个文件${sizeText}...`;
         document.body.appendChild(progressDiv);
     }
 
     function updateUploadProgress(current, total, detail = '') {
         const progressDiv = document.getElementById('folder-upload-progress');
         if (progressDiv) {
-            const detailText = detail ? ` - ${detail}` : '';
-            progressDiv.textContent = `正在上传: ${current}/${total}${detailText}`;
+            const progressPercent = total > 0 ? Math.round((current / total) * 100) : 0;
+            const detailText = detail ? `\n${detail}` : '';
+            progressDiv.innerHTML = `
+                <div style="font-weight: bold; margin-bottom: 5px;">
+                    正在上传: ${current}/${total} (${progressPercent}%)
+                </div>
+                <div style="font-size: 12px; color: rgba(255, 255, 255, 0.8); word-break: break-all;">
+                    ${detailText || '准备中...'}
+                </div>
+            `;
         }
     }
 
@@ -271,37 +302,83 @@
         }, 3000);
     }
 
-    async function uploadFiles(files) {
+    async function uploadFilesSequentially(files) {
         const total = files.length;
         let successCount = 0;
         let failCount = 0;
         const failedFiles = [];
+        let uploadedSize = 0;
+        const totalSize = files.reduce((sum, f) => sum + f.file.size, 0);
 
-        // 获取上传配置（从现有代码中获取）
+        // 获取上传配置
         const uploadConfig = getUploadConfig();
 
+        // 逐个上传文件，确保顺序执行
         for (let i = 0; i < files.length; i++) {
             const { file, path } = files[i];
             const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
-            updateUploadProgress(i + 1, total, `${path} (${fileSizeMB}MB)`);
+            const uploadedMB = (uploadedSize / 1024 / 1024).toFixed(2);
+            const totalMB = (totalSize / 1024 / 1024).toFixed(2);
+            
+            // 更新进度：显示当前文件、进度百分比、已上传大小
+            const progressPercent = totalSize > 0 ? Math.round((uploadedSize / totalSize) * 100) : 0;
+            updateUploadProgress(
+                i + 1, 
+                total, 
+                `${path} (${fileSizeMB}MB) - 总进度: ${progressPercent}% (${uploadedMB}MB/${totalMB}MB)`
+            );
 
             try {
+                // 上传单个文件，传入进度回调
                 await uploadSingleFile(file, path, uploadConfig, (chunkProgress) => {
                     // 分块上传进度回调
                     if (chunkProgress) {
-                        updateUploadProgress(i + 1, total, `${path} - 分块 ${chunkProgress.current}/${chunkProgress.total}`);
+                        if (chunkProgress.merging) {
+                            updateUploadProgress(
+                                i + 1, 
+                                total, 
+                                `${path} - 正在合并分块...`
+                            );
+                        } else if (chunkProgress.waiting) {
+                            updateUploadProgress(
+                                i + 1, 
+                                total, 
+                                `${path} - 等待合并完成...`
+                            );
+                        } else {
+                            const chunkPercent = Math.round((chunkProgress.current / chunkProgress.total) * 100);
+                            updateUploadProgress(
+                                i + 1, 
+                                total, 
+                                `${path} - 分块 ${chunkProgress.current}/${chunkProgress.total} (${chunkPercent}%)`
+                            );
+                        }
                     }
                 });
+                
                 successCount++;
+                uploadedSize += file.size;
+                
+                // 更新总进度
+                const finalProgressPercent = totalSize > 0 ? Math.round((uploadedSize / totalSize) * 100) : 0;
+                updateUploadProgress(
+                    i + 1, 
+                    total, 
+                    `✓ ${path} - 总进度: ${finalProgressPercent}%`
+                );
             } catch (error) {
                 console.error(`上传文件失败 ${path}:`, error);
                 failCount++;
-                failedFiles.push({ path, error: error.message });
+                failedFiles.push({ path, error: error.message, size: fileSizeMB });
+                
+                // 即使失败，也更新已上传大小（用于进度计算）
+                uploadedSize += file.size;
             }
 
-            // 添加小延迟，避免请求过快
+            // 小文件之间添加短暂延迟，大文件之间添加稍长延迟
             if (i < files.length - 1) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+                const delay = file.size > 20 * 1024 * 1024 ? 500 : 200;
+                await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
 
@@ -312,6 +389,12 @@
                 progressDiv.textContent = `上传完成: 成功 ${successCount}, 失败 ${failCount}`;
                 progressDiv.style.background = 'rgba(255, 152, 0, 0.9)';
                 console.warn('失败的文件:', failedFiles);
+                
+                // 显示失败文件详情
+                if (failedFiles.length > 0) {
+                    const failedList = failedFiles.map(f => `  - ${f.path}: ${f.error}`).join('\n');
+                    console.error('失败文件详情:\n' + failedList);
+                }
             } else {
                 progressDiv.textContent = `上传完成: 成功 ${successCount} 个文件`;
                 progressDiv.style.background = 'rgba(76, 175, 80, 0.9)';

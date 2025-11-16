@@ -250,8 +250,9 @@
                 if (!entry) continue;
 
                 if (entry.isDirectory) {
-                    // 递归处理文件夹
-                    filePromises.push(processDirectoryEntry(entry, '', files));
+                    // 递归处理文件夹，使用文件夹名称作为 basePath
+                    // 这样文件夹内的文件路径会是 "文件夹名/文件名"
+                    filePromises.push(processDirectoryEntry(entry, entry.name, files));
                 } else if (entry.isFile) {
                     // 处理单个文件（直接拖拽的文件，没有文件夹结构）
                     filePromises.push(processFileEntry(entry, '', files));
@@ -305,7 +306,8 @@
                             if (entry.isDirectory) {
                                 return processDirectoryEntry(entry, fullPath, files);
                             } else {
-                                return processFileEntry(entry, basePath, files);
+                                // 使用 fullPath 而不是 basePath，确保文件路径包含完整的文件夹结构
+                                return processFileEntry(entry, fullPath, files);
                             }
                         });
                         Promise.all(promises).then(() => resolve());
@@ -323,7 +325,10 @@
         return new Promise((resolve) => {
             entry.file((file) => {
                 // 创建带有路径信息的文件对象
+                // basePath 已经包含了完整的文件夹路径（如 "folder/subfolder"）
+                // 文件名是 file.name，所以完整路径应该是 basePath/file.name
                 const relativePath = basePath ? `${basePath}/${file.name}` : file.name;
+                console.log(`[文件夹上传] 扫描文件: ${relativePath}`);
                 files.push({
                     file: file,
                     path: relativePath
@@ -540,6 +545,8 @@
         const fileName = pathParts[pathParts.length - 1]; // 只取文件名
         const folderPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
         
+        console.log(`[文件夹上传] 直接上传文件: ${relativePath}, 文件夹路径: ${folderPath || '(根目录)'}`);
+        
         // 文件名包含完整路径（后端会从文件名中提取路径作为备用）
         const fileWithPath = new File([file], relativePath, {
             type: file.type,
@@ -550,6 +557,7 @@
 
         // 构建上传 URL，确保传递文件夹路径
         const uploadUrl = buildUploadUrl(relativePath, folderPath, config);
+        console.log(`[文件夹上传] 上传 URL: ${uploadUrl}`);
 
         // 发送上传请求
         const response = await fetch(uploadUrl, {
@@ -704,6 +712,8 @@
             // 提取文件夹路径
             const pathParts = relativePath.split('/');
             const folderPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
+            
+            console.log(`[文件夹上传] 合并分块: ${relativePath}, 文件夹路径: ${folderPath || '(根目录)'}`);
 
             const mergeFormData = new FormData();
             mergeFormData.append('uploadId', uploadId);

@@ -231,10 +231,11 @@
         document.body.appendChild(progressDiv);
     }
 
-    function updateUploadProgress(current, total) {
+    function updateUploadProgress(current, total, detail = '') {
         const progressDiv = document.getElementById('folder-upload-progress');
         if (progressDiv) {
-            progressDiv.textContent = `正在上传: ${current}/${total}`;
+            const detailText = detail ? ` - ${detail}` : '';
+            progressDiv.textContent = `正在上传: ${current}/${total}${detailText}`;
         }
     }
 
@@ -274,20 +275,28 @@
         const total = files.length;
         let successCount = 0;
         let failCount = 0;
+        const failedFiles = [];
 
         // 获取上传配置（从现有代码中获取）
         const uploadConfig = getUploadConfig();
 
         for (let i = 0; i < files.length; i++) {
             const { file, path } = files[i];
-            updateUploadProgress(i + 1, total);
+            const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+            updateUploadProgress(i + 1, total, `${path} (${fileSizeMB}MB)`);
 
             try {
-                await uploadSingleFile(file, path, uploadConfig);
+                await uploadSingleFile(file, path, uploadConfig, (chunkProgress) => {
+                    // 分块上传进度回调
+                    if (chunkProgress) {
+                        updateUploadProgress(i + 1, total, `${path} - 分块 ${chunkProgress.current}/${chunkProgress.total}`);
+                    }
+                });
                 successCount++;
             } catch (error) {
                 console.error(`上传文件失败 ${path}:`, error);
                 failCount++;
+                failedFiles.push({ path, error: error.message });
             }
 
             // 添加小延迟，避免请求过快
@@ -299,8 +308,14 @@
         // 显示完成提示
         const progressDiv = document.getElementById('folder-upload-progress');
         if (progressDiv) {
-            progressDiv.textContent = `上传完成: 成功 ${successCount}, 失败 ${failCount}`;
-            progressDiv.style.background = failCount > 0 ? 'rgba(255, 152, 0, 0.9)' : 'rgba(76, 175, 80, 0.9)';
+            if (failCount > 0) {
+                progressDiv.textContent = `上传完成: 成功 ${successCount}, 失败 ${failCount}`;
+                progressDiv.style.background = 'rgba(255, 152, 0, 0.9)';
+                console.warn('失败的文件:', failedFiles);
+            } else {
+                progressDiv.textContent = `上传完成: 成功 ${successCount} 个文件`;
+                progressDiv.style.background = 'rgba(76, 175, 80, 0.9)';
+            }
         }
 
         hideUploadProgress();
@@ -309,11 +324,22 @@
         triggerRefresh();
     }
 
-    async function uploadSingleFile(file, relativePath, config) {
+    async function uploadSingleFile(file, relativePath, config, progressCallback) {
+        // 检查文件大小，超过 20MB 使用分块上传
+        const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
+        const useChunked = file.size > CHUNK_SIZE;
+
+        if (useChunked) {
+            return await uploadFileChunked(file, relativePath, config, progressCallback);
+        } else {
+            return await uploadFileDirect(file, relativePath, config);
+        }
+    }
+
+    async function uploadFileDirect(file, relativePath, config) {
         const formData = new FormData();
         
         // 创建包含路径的文件名
-        // 使用 File 构造函数创建新文件，文件名包含完整路径
         const fileWithPath = new File([file], relativePath, {
             type: file.type,
             lastModified: file.lastModified
@@ -337,6 +363,180 @@
         }
 
         return await response.json();
+    }
+
+    async function uploadFileChunked(file, relativePath, config, progressCallback) {
+        const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const baseUrl = window.location.origin;
+        
+        try {
+            // 1. 初始化分块上传
+            const initFormData = new FormData();
+            initFormData.append('originalFileName', relativePath);
+            initFormData.append('originalFileType', file.type || 'application/octet-stream');
+            initFormData.append('totalChunks', totalChunks.toString());
+
+            const initUrl = new URL('/upload', baseUrl);
+            initUrl.searchParams.set('initChunked', 'true');
+            if (config && config.uploadChannel) {
+                initUrl.searchParams.set('uploadChannel', config.uploadChannel);
+            }
+
+            const initResponse = await fetch(initUrl.toString(), {
+                method: 'POST',
+                body: initFormData,
+                headers: getUploadHeaders()
+            });
+
+            if (!initResponse.ok) {
+                const errorText = await initResponse.text();
+                throw new Error(`初始化分块上传失败: ${errorText}`);
+            }
+
+            const initResult = await initResponse.json();
+            const uploadId = initResult.uploadId;
+
+            if (!uploadId) {
+                throw new Error('初始化分块上传失败: 未返回 uploadId');
+            }
+
+            // 2. 上传所有分块
+            const uploadPromises = [];
+            let completedChunks = 0;
+            
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, file.size);
+                const chunk = file.slice(start, end);
+
+                const chunkFormData = new FormData();
+                chunkFormData.append('file', chunk);
+                chunkFormData.append('chunkIndex', i.toString());
+                chunkFormData.append('totalChunks', totalChunks.toString());
+                chunkFormData.append('uploadId', uploadId);
+                chunkFormData.append('originalFileName', relativePath);
+                chunkFormData.append('originalFileType', file.type || 'application/octet-stream');
+
+                const chunkUrl = new URL('/upload', baseUrl);
+                chunkUrl.searchParams.set('chunked', 'true');
+                if (config && config.uploadChannel) {
+                    chunkUrl.searchParams.set('uploadChannel', config.uploadChannel);
+                }
+
+                // 控制并发，每次最多同时上传 3 个分块
+                const uploadPromise = fetch(chunkUrl.toString(), {
+                    method: 'POST',
+                    body: chunkFormData,
+                    headers: getUploadHeaders()
+                }).then(async (response) => {
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`分块 ${i + 1}/${totalChunks} 上传失败: ${errorText}`);
+                    }
+                    completedChunks++;
+                    // 更新进度
+                    if (progressCallback) {
+                        progressCallback({ current: completedChunks, total: totalChunks });
+                    }
+                    return await response.json();
+                }).catch((error) => {
+                    throw new Error(`分块 ${i + 1}/${totalChunks} 上传失败: ${error.message}`);
+                });
+
+                uploadPromises.push(uploadPromise);
+
+                // 每 3 个分块等待一次，避免过多并发
+                if ((i + 1) % 3 === 0) {
+                    await Promise.all(uploadPromises.slice(-3));
+                }
+            }
+
+            // 等待所有分块上传完成
+            await Promise.all(uploadPromises);
+
+            // 3. 合并分块
+            if (progressCallback) {
+                progressCallback({ current: totalChunks, total: totalChunks, merging: true });
+            }
+
+            const mergeFormData = new FormData();
+            mergeFormData.append('uploadId', uploadId);
+            mergeFormData.append('totalChunks', totalChunks.toString());
+            mergeFormData.append('originalFileName', relativePath);
+            mergeFormData.append('originalFileType', file.type || 'application/octet-stream');
+
+            // 设置上传文件夹路径
+            const pathParts = relativePath.split('/');
+            if (pathParts.length > 1) {
+                const folderPath = pathParts.slice(0, -1).join('/');
+                mergeFormData.append('uploadFolder', folderPath);
+            }
+
+            const mergeUrl = new URL('/upload', baseUrl);
+            mergeUrl.searchParams.set('chunked', 'true');
+            mergeUrl.searchParams.set('merge', 'true');
+            if (config && config.uploadChannel) {
+                mergeUrl.searchParams.set('uploadChannel', config.uploadChannel);
+            }
+
+            const mergeResponse = await fetch(mergeUrl.toString(), {
+                method: 'POST',
+                body: mergeFormData,
+                headers: getUploadHeaders()
+            });
+
+            if (!mergeResponse.ok) {
+                const errorText = await mergeResponse.text();
+                throw new Error(`合并分块失败: ${errorText}`);
+            }
+
+            const mergeResult = await mergeResponse.json();
+
+            // 如果返回的是异步处理状态，需要轮询检查状态
+            if (mergeResult.status === 'processing' || mergeResult.status === 'merging') {
+                if (progressCallback) {
+                    progressCallback({ current: totalChunks, total: totalChunks, merging: true, waiting: true });
+                }
+                return await waitForMergeCompletion(uploadId, baseUrl);
+            }
+
+            return mergeResult;
+        } catch (error) {
+            console.error('分块上传失败:', error);
+            throw error;
+        }
+    }
+
+    async function waitForMergeCompletion(uploadId, baseUrl, maxWaitTime = 300000) {
+        const startTime = Date.now();
+        const checkInterval = 2000; // 每 2 秒检查一次
+
+        while (Date.now() - startTime < maxWaitTime) {
+            const statusUrl = new URL('/upload', baseUrl);
+            statusUrl.searchParams.set('statusCheck', 'true');
+            statusUrl.searchParams.set('uploadId', uploadId);
+
+            const statusResponse = await fetch(statusUrl.toString(), {
+                method: 'GET',
+                headers: getUploadHeaders()
+            });
+
+            if (statusResponse.ok) {
+                const status = await statusResponse.json();
+                
+                if (status.status === 'success') {
+                    return { src: status.result?.[0]?.src || status.result?.src };
+                } else if (status.status === 'error' || status.status === 'timeout') {
+                    throw new Error(`合并失败: ${status.message || status.error}`);
+                }
+                // 继续等待 processing 或 merging 状态
+            }
+
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
+        }
+
+        throw new Error('合并超时: 等待时间超过 5 分钟');
     }
 
     function buildUploadUrl(relativePath, config) {

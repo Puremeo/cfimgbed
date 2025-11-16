@@ -28,14 +28,17 @@
             return;
         }
 
-        // 监听拖拽事件
-        uploadArea.addEventListener('dragover', handleDragOver, false);
-        uploadArea.addEventListener('dragleave', handleDragLeave, false);
-        uploadArea.addEventListener('drop', handleDrop, false);
+        // 使用捕获模式（true）确保我们的监听器先执行
+        // 这样可以优先处理文件夹和大文件上传
+        uploadArea.addEventListener('dragover', handleDragOver, true);
+        uploadArea.addEventListener('dragleave', handleDragLeave, true);
+        uploadArea.addEventListener('drop', handleDrop, true);
         
-        // 也监听整个文档的拖拽事件作为备用
-        document.addEventListener('dragover', handleDragOver, false);
-        document.addEventListener('drop', handleDrop, false);
+        // 也监听整个文档的拖拽事件作为备用（使用捕获模式）
+        document.addEventListener('dragover', handleDragOver, true);
+        document.addEventListener('drop', handleDrop, true);
+        
+        console.log('[文件夹上传] 事件监听器已设置（捕获模式，优先级最高）');
     }
 
     function findUploadArea() {
@@ -102,67 +105,34 @@
     async function handleDrop(e) {
         const items = e.dataTransfer.items;
         if (!items || items.length === 0) {
+            console.log('[文件夹上传] 没有检测到文件');
             return; // 让原有代码处理
         }
 
         // 检查浏览器是否支持文件夹拖拽
         if (!items[0].webkitGetAsEntry) {
-            // 浏览器不支持，让原有的文件上传逻辑处理
             console.log('[文件夹上传] 浏览器不支持文件夹拖拽，使用原有上传方式');
-            return;
+            return; // 让原有代码处理
         }
 
-        // 检查是否包含文件夹
+        // 检查是否包含文件夹或大文件
         let hasDirectory = false;
         let hasFiles = false;
+        const files = [];
+        const filePromises = [];
         
         try {
+            // 先快速检查是否有文件夹
             for (let i = 0; i < items.length; i++) {
                 const entry = items[i].webkitGetAsEntry();
                 if (entry) {
                     if (entry.isDirectory) {
                         hasDirectory = true;
                         console.log(`[文件夹上传] 检测到文件夹: ${entry.name}`);
+                        break; // 找到文件夹就停止
                     } else if (entry.isFile) {
                         hasFiles = true;
-                    }
-                }
-            }
-        } catch (error) {
-            console.warn('[文件夹上传] 检查文件类型时出错，让原有代码处理:', error);
-            return; // 出错时让原有代码处理
-        }
-
-        // 检测到文件夹时，使用文件夹上传
-        if (hasDirectory) {
-            console.log('[文件夹上传] 开始处理文件夹上传');
-            
-            // 阻止事件冒泡，避免原有代码也处理
-            e.preventDefault();
-            e.stopPropagation();
-            
-            // 移除拖拽样式
-            if (e.currentTarget) {
-                e.currentTarget.classList.remove('drag-over');
-            }
-            
-            // 处理文件夹上传（包括混合的文件和文件夹）
-            try {
-                await handleFolderUpload(items);
-            } catch (error) {
-                console.error('[文件夹上传] 上传失败:', error);
-                showMessage('文件夹上传失败: ' + error.message, 'error');
-            }
-        } else if (hasFiles) {
-            // 检测到单个文件，检查文件大小
-            // 如果文件大于 20MB，使用我们的分块上传逻辑（支持大文件）
-            const files = [];
-            const filePromises = [];
-            
-            try {
-                for (let i = 0; i < items.length; i++) {
-                    const entry = items[i].webkitGetAsEntry();
-                    if (entry && entry.isFile) {
+                        // 异步读取文件信息
                         filePromises.push(
                             new Promise((resolve) => {
                                 entry.file((file) => {
@@ -176,45 +146,77 @@
                         );
                     }
                 }
-                
-                // 等待所有文件读取完成
-                await Promise.all(filePromises);
-                
-                // 检查是否有大文件（> 20MB）
-                const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
-                const hasLargeFile = files.some(f => f.file.size > CHUNK_SIZE);
-                
-                // 如果有大文件，使用我们的分块上传逻辑
-                if (hasLargeFile && files.length > 0) {
-                    console.log(`[文件夹上传] 检测到大文件 (${files.length}个)，使用分块上传`);
-                    
-                    // 阻止事件冒泡
-                    e.preventDefault();
-                    e.stopPropagation();
-                    
-                    // 移除拖拽样式
-                    if (e.currentTarget) {
-                        e.currentTarget.classList.remove('drag-over');
-                    }
-                    
-                    // 使用我们的上传逻辑处理大文件
-                    try {
-                        showUploadProgress(files.length);
-                        await uploadFilesSequentially(files);
-                    } catch (error) {
-                        console.error('[文件夹上传] 大文件上传失败:', error);
-                        showMessage('大文件上传失败: ' + error.message, 'error');
-                    }
-                } else {
-                    // 小文件，让原有的文件上传逻辑处理
-                    console.log('[文件夹上传] 检测到小文件，使用原有上传方式');
-                    return;
-                }
+            }
+        } catch (error) {
+            console.warn('[文件夹上传] 检查文件类型时出错:', error);
+            return; // 出错时让原有代码处理
+        }
+
+        // 如果检测到文件夹，立即拦截并处理
+        if (hasDirectory) {
+            console.log('[文件夹上传] 开始处理文件夹上传');
+            
+            // 阻止事件传播
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            
+            // 移除拖拽样式
+            if (e.currentTarget) {
+                e.currentTarget.classList.remove('drag-over');
+            }
+            
+            // 处理文件夹上传
+            try {
+                await handleFolderUpload(items);
             } catch (error) {
-                console.warn('[文件夹上传] 检查文件大小时出错，使用原有上传方式:', error);
-                return; // 出错时让原有代码处理
+                console.error('[文件夹上传] 上传失败:', error);
+                showMessage('文件夹上传失败: ' + error.message, 'error');
+            }
+            return;
+        }
+
+        // 如果只有文件，等待文件信息读取完成后再决定
+        if (hasFiles && filePromises.length > 0) {
+            // 等待所有文件读取完成
+            await Promise.all(filePromises);
+            
+            // 检查是否有大文件（> 20MB）
+            const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
+            const hasLargeFile = files.some(f => f.file.size > CHUNK_SIZE);
+            
+            if (hasLargeFile && files.length > 0) {
+                console.log(`[文件夹上传] 检测到大文件 (${files.length}个，最大 ${(Math.max(...files.map(f => f.file.size)) / 1024 / 1024).toFixed(2)}MB)，使用分块上传`);
+                
+                // 阻止事件传播
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                
+                // 移除拖拽样式
+                if (e.currentTarget) {
+                    e.currentTarget.classList.remove('drag-over');
+                }
+                
+                // 使用我们的上传逻辑处理大文件
+                try {
+                    showUploadProgress(files.length);
+                    await uploadFilesSequentially(files);
+                } catch (error) {
+                    console.error('[文件夹上传] 大文件上传失败:', error);
+                    showMessage('大文件上传失败: ' + error.message, 'error');
+                }
+                return;
+            } else {
+                // 小文件，让原有的文件上传逻辑处理
+                console.log(`[文件夹上传] 检测到小文件 (${files.length}个，最大 ${files.length > 0 ? (Math.max(...files.map(f => f.file.size)) / 1024 / 1024).toFixed(2) : 0}MB)，使用原有上传方式`);
+                // 不阻止事件，让原有代码处理
+                return;
             }
         }
+        
+        // 如果既没有文件夹也没有文件，让原有代码处理
+        console.log('[文件夹上传] 未检测到可处理的文件');
     }
 
     async function handleFolderUpload(items) {

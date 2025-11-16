@@ -96,9 +96,14 @@
         e.preventDefault();
         e.stopPropagation();
         
-        // 移除拖拽样式
-        if (e.currentTarget) {
-            e.currentTarget.classList.remove('drag-over');
+        // 移除拖拽样式（安全地处理）
+        try {
+            const target = e.currentTarget || e.target;
+            if (target && target.classList && typeof target.classList.remove === 'function') {
+                target.classList.remove('drag-over');
+            }
+        } catch (error) {
+            // 忽略样式移除错误
         }
     }
 
@@ -161,9 +166,15 @@
             e.stopPropagation();
             e.stopImmediatePropagation();
             
-            // 移除拖拽样式
-            if (e.currentTarget) {
-                e.currentTarget.classList.remove('drag-over');
+            // 移除拖拽样式（安全地处理）
+            try {
+                const target = e.currentTarget || e.target;
+                if (target && target.classList && typeof target.classList.remove === 'function') {
+                    target.classList.remove('drag-over');
+                }
+            } catch (error) {
+                // 忽略样式移除错误
+                console.warn('[文件夹上传] 移除拖拽样式时出错:', error);
             }
             
             // 处理文件夹上传
@@ -193,9 +204,15 @@
                 e.stopPropagation();
                 e.stopImmediatePropagation();
                 
-                // 移除拖拽样式
-                if (e.currentTarget) {
-                    e.currentTarget.classList.remove('drag-over');
+                // 移除拖拽样式（安全地处理）
+                try {
+                    const target = e.currentTarget || e.target;
+                    if (target && target.classList && typeof target.classList.remove === 'function') {
+                        target.classList.remove('drag-over');
+                    }
+                } catch (error) {
+                    // 忽略样式移除错误
+                    console.warn('[文件夹上传] 移除拖拽样式时出错:', error);
                 }
                 
                 // 使用我们的上传逻辑处理大文件
@@ -553,19 +570,28 @@
         const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
         const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+        const fileSizeGB = (file.size / 1024 / 1024 / 1024).toFixed(2);
         const baseUrl = window.location.origin;
         
         // 调试信息：检查文件大小和分块数量
-        console.log(`[文件夹上传] 文件: ${relativePath}, 大小: ${fileSizeMB}MB, 分块数: ${totalChunks}`);
+        console.group(`[文件夹上传] 开始分块上传`);
+        console.log(`文件: ${relativePath}`);
+        console.log(`大小: ${fileSizeMB}MB (${fileSizeGB}GB)`);
+        console.log(`分块数: ${totalChunks} (每块 ${CHUNK_SIZE / 1024 / 1024}MB)`);
+        console.log(`限制: 最大 200 个分块 (4GB)`);
         
         // 前端检查：如果分块数超过200，提前提示
         if (totalChunks > 200) {
             const maxSizeGB = (200 * 20 / 1024).toFixed(1);
-            throw new Error(`文件过大: ${fileSizeMB}MB (${totalChunks}个分块)，超过最大限制 ${maxSizeGB}GB (200个分块)`);
+            const errorMsg = `文件过大: ${fileSizeMB}MB (${totalChunks}个分块)，超过最大限制 ${maxSizeGB}GB (200个分块)`;
+            console.error(`[文件夹上传] ${errorMsg}`);
+            console.groupEnd();
+            throw new Error(errorMsg);
         }
         
         try {
             // 1. 初始化分块上传
+            console.log(`[文件夹上传] 步骤 1/3: 初始化分块上传...`);
             const initFormData = new FormData();
             initFormData.append('originalFileName', relativePath);
             initFormData.append('originalFileType', file.type || 'application/octet-stream');
@@ -576,6 +602,16 @@
             if (config && config.uploadChannel) {
                 initUrl.searchParams.set('uploadChannel', config.uploadChannel);
             }
+            
+            // 添加认证参数
+            const currentUrl = new URL(window.location.href);
+            const authCode = currentUrl.searchParams.get('authCode');
+            if (authCode) {
+                initUrl.searchParams.set('authCode', authCode);
+            }
+
+            console.log(`[文件夹上传] 初始化请求 URL: ${initUrl.toString()}`);
+            console.log(`[文件夹上传] 请求头:`, getUploadHeaders());
 
             const initResponse = await fetch(initUrl.toString(), {
                 method: 'POST',
@@ -583,17 +619,26 @@
                 headers: getUploadHeaders()
             });
 
+            console.log(`[文件夹上传] 初始化响应状态: ${initResponse.status} ${initResponse.statusText}`);
+
             if (!initResponse.ok) {
                 const errorText = await initResponse.text();
-                throw new Error(`初始化分块上传失败: ${errorText}`);
+                console.error(`[文件夹上传] 初始化失败响应:`, errorText);
+                console.groupEnd();
+                throw new Error(`初始化分块上传失败 (${initResponse.status}): ${errorText}`);
             }
 
             const initResult = await initResponse.json();
+            console.log(`[文件夹上传] 初始化结果:`, initResult);
             const uploadId = initResult.uploadId;
 
             if (!uploadId) {
+                console.error(`[文件夹上传] 初始化失败: 未返回 uploadId`);
+                console.groupEnd();
                 throw new Error('初始化分块上传失败: 未返回 uploadId');
             }
+
+            console.log(`[文件夹上传] 步骤 2/3: 上传分块 (uploadId: ${uploadId})...`);
 
             // 2. 上传所有分块
             const uploadPromises = [];
@@ -647,9 +692,11 @@
             }
 
             // 等待所有分块上传完成
+            console.log(`[文件夹上传] 所有分块上传完成 (${totalChunks}/${totalChunks})`);
             await Promise.all(uploadPromises);
 
             // 3. 合并分块
+            console.log(`[文件夹上传] 步骤 3/3: 合并分块...`);
             if (progressCallback) {
                 progressCallback({ current: totalChunks, total: totalChunks, merging: true });
             }
@@ -679,30 +726,43 @@
                 mergeUrl.searchParams.set('uploadChannel', config.uploadChannel);
             }
 
+            console.log(`[文件夹上传] 合并请求 URL: ${mergeUrl.toString()}`);
             const mergeResponse = await fetch(mergeUrl.toString(), {
                 method: 'POST',
                 body: mergeFormData,
                 headers: getUploadHeaders()
             });
 
+            console.log(`[文件夹上传] 合并响应状态: ${mergeResponse.status} ${mergeResponse.statusText}`);
+
             if (!mergeResponse.ok) {
                 const errorText = await mergeResponse.text();
-                throw new Error(`合并分块失败: ${errorText}`);
+                console.error(`[文件夹上传] 合并失败响应:`, errorText);
+                console.groupEnd();
+                throw new Error(`合并分块失败 (${mergeResponse.status}): ${errorText}`);
             }
 
             const mergeResult = await mergeResponse.json();
+            console.log(`[文件夹上传] 合并结果:`, mergeResult);
 
             // 如果返回的是异步处理状态，需要轮询检查状态
             if (mergeResult.status === 'processing' || mergeResult.status === 'merging') {
+                console.log(`[文件夹上传] 合并处理中，等待完成...`);
                 if (progressCallback) {
                     progressCallback({ current: totalChunks, total: totalChunks, merging: true, waiting: true });
                 }
-                return await waitForMergeCompletion(uploadId, baseUrl);
+                const finalResult = await waitForMergeCompletion(uploadId, baseUrl);
+                console.log(`[文件夹上传] 分块上传完成！`);
+                console.groupEnd();
+                return finalResult;
             }
 
+            console.log(`[文件夹上传] 分块上传完成！`);
+            console.groupEnd();
             return mergeResult;
         } catch (error) {
-            console.error('分块上传失败:', error);
+            console.error('[文件夹上传] 分块上传失败:', error);
+            console.groupEnd();
             throw error;
         }
     }

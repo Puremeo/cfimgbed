@@ -21,6 +21,18 @@ export async function initializeChunkedUpload(context) {
             return createResponse('Error: Missing initialization parameters', { status: 400 });
         }
         
+        // 检查分块数量限制（200个分块 × 20MB = 4GB）
+        if (totalChunks > 200) {
+            const maxSizeGB = (200 * 20 / 1024).toFixed(1);
+            const fileSizeMB = (totalChunks * 20).toFixed(2);
+            console.log(`[分块上传初始化] 文件过大: ${fileSizeMB}MB (${totalChunks}个分块)，超过最大限制 ${maxSizeGB}GB`);
+            return createResponse(`Error: File too large (exceeds ${maxSizeGB}GB limit, current: ${totalChunks} chunks, estimated size: ${fileSizeMB}MB)`, { status: 413 });
+        }
+        
+        // 记录初始化信息用于调试
+        const fileSizeMB = (totalChunks * 20).toFixed(2);
+        console.log(`[分块上传初始化] 文件: ${originalFileName}, 预计大小: ${fileSizeMB}MB, 分块数: ${totalChunks}`);
+        
         // 生成唯一的 uploadId
         const timestamp = Date.now();
         const random = Math.random().toString(36).slice(2, 11);

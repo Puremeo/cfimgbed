@@ -59,12 +59,33 @@
     }
 
     function handleDragOver(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // 添加拖拽样式提示
-        if (e.currentTarget) {
-            e.currentTarget.classList.add('drag-over');
+        // 检查是否包含文件夹
+        const items = e.dataTransfer?.items;
+        if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+            try {
+                // 快速检查是否有文件夹
+                let hasDirectory = false;
+                for (let i = 0; i < Math.min(items.length, 5); i++) { // 只检查前5个，避免性能问题
+                    const entry = items[i].webkitGetAsEntry();
+                    if (entry && entry.isDirectory) {
+                        hasDirectory = true;
+                        break;
+                    }
+                }
+                
+                // 只有检测到文件夹时才拦截
+                if (hasDirectory) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // 添加拖拽样式提示
+                    if (e.currentTarget) {
+                        e.currentTarget.classList.add('drag-over');
+                    }
+                }
+            } catch (error) {
+                // 出错时不拦截，让原有代码处理
+            }
         }
     }
 
@@ -79,23 +100,14 @@
     }
 
     async function handleDrop(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // 移除拖拽样式
-        if (e.currentTarget) {
-            e.currentTarget.classList.remove('drag-over');
-        }
-
         const items = e.dataTransfer.items;
         if (!items || items.length === 0) {
-            return;
+            return; // 让原有代码处理
         }
 
         // 检查浏览器是否支持文件夹拖拽
         if (!items[0].webkitGetAsEntry) {
-            console.warn('浏览器不支持文件夹拖拽功能，请使用 Chrome、Edge 或 Firefox 最新版本');
-            // 让原有的文件上传逻辑处理
+            // 浏览器不支持，让原有的文件上传逻辑处理
             return;
         }
 
@@ -103,22 +115,42 @@
         let hasDirectory = false;
         let hasFiles = false;
         
-        for (let i = 0; i < items.length; i++) {
-            const entry = items[i].webkitGetAsEntry();
-            if (entry) {
-                if (entry.isDirectory) {
-                    hasDirectory = true;
-                } else if (entry.isFile) {
-                    hasFiles = true;
+        try {
+            for (let i = 0; i < items.length; i++) {
+                const entry = items[i].webkitGetAsEntry();
+                if (entry) {
+                    if (entry.isDirectory) {
+                        hasDirectory = true;
+                    } else if (entry.isFile) {
+                        hasFiles = true;
+                    }
                 }
             }
+        } catch (error) {
+            console.warn('检查文件类型时出错，让原有代码处理:', error);
+            return; // 出错时让原有代码处理
         }
 
+        // 只有检测到文件夹时才拦截处理
         if (hasDirectory) {
+            // 阻止事件冒泡，避免原有代码也处理
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // 移除拖拽样式
+            if (e.currentTarget) {
+                e.currentTarget.classList.remove('drag-over');
+            }
+            
             // 处理文件夹上传（包括混合的文件和文件夹）
-            await handleFolderUpload(items);
-        } else if (hasFiles) {
-            // 只有文件，让原有的文件上传逻辑处理
+            try {
+                await handleFolderUpload(items);
+            } catch (error) {
+                console.error('文件夹上传失败:', error);
+                showMessage('文件夹上传失败: ' + error.message, 'error');
+            }
+        } else {
+            // 只有文件，不拦截，让原有的文件上传逻辑处理
             return;
         }
     }

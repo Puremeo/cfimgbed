@@ -133,7 +133,7 @@
             return; // 出错时让原有代码处理
         }
 
-        // 只有检测到文件夹时才拦截处理
+        // 检测到文件夹时，使用文件夹上传
         if (hasDirectory) {
             console.log('[文件夹上传] 开始处理文件夹上传');
             
@@ -153,10 +153,67 @@
                 console.error('[文件夹上传] 上传失败:', error);
                 showMessage('文件夹上传失败: ' + error.message, 'error');
             }
-        } else {
-            // 只有文件，不拦截，让原有的文件上传逻辑处理
-            console.log('[文件夹上传] 检测到单个文件，使用原有上传方式');
-            return;
+        } else if (hasFiles) {
+            // 检测到单个文件，检查文件大小
+            // 如果文件大于 20MB，使用我们的分块上传逻辑（支持大文件）
+            const files = [];
+            const filePromises = [];
+            
+            try {
+                for (let i = 0; i < items.length; i++) {
+                    const entry = items[i].webkitGetAsEntry();
+                    if (entry && entry.isFile) {
+                        filePromises.push(
+                            new Promise((resolve) => {
+                                entry.file((file) => {
+                                    files.push({ file, path: file.name });
+                                    resolve();
+                                }, (error) => {
+                                    console.warn('[文件夹上传] 读取文件失败:', error);
+                                    resolve();
+                                });
+                            })
+                        );
+                    }
+                }
+                
+                // 等待所有文件读取完成
+                await Promise.all(filePromises);
+                
+                // 检查是否有大文件（> 20MB）
+                const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
+                const hasLargeFile = files.some(f => f.file.size > CHUNK_SIZE);
+                
+                // 如果有大文件，使用我们的分块上传逻辑
+                if (hasLargeFile && files.length > 0) {
+                    console.log(`[文件夹上传] 检测到大文件 (${files.length}个)，使用分块上传`);
+                    
+                    // 阻止事件冒泡
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // 移除拖拽样式
+                    if (e.currentTarget) {
+                        e.currentTarget.classList.remove('drag-over');
+                    }
+                    
+                    // 使用我们的上传逻辑处理大文件
+                    try {
+                        showUploadProgress(files.length);
+                        await uploadFilesSequentially(files);
+                    } catch (error) {
+                        console.error('[文件夹上传] 大文件上传失败:', error);
+                        showMessage('大文件上传失败: ' + error.message, 'error');
+                    }
+                } else {
+                    // 小文件，让原有的文件上传逻辑处理
+                    console.log('[文件夹上传] 检测到小文件，使用原有上传方式');
+                    return;
+                }
+            } catch (error) {
+                console.warn('[文件夹上传] 检查文件大小时出错，使用原有上传方式:', error);
+                return; // 出错时让原有代码处理
+            }
         }
     }
 

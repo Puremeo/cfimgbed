@@ -1025,9 +1025,14 @@ export async function uploadLargeFileToTelegram(context, file, fullId, metadata,
     const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
     
     // 为了避免CPU超时，限制最大分片数（考虑Cloudflare Worker的CPU时间限制）
+    // 200个分块 × 20MB = 4GB 最大文件大小
     if (totalChunks > 200) {
-        return createResponse('Error: File too large (exceeds 4GB limit)', { status: 413 });
+        const maxSizeGB = (200 * 20 / 1024).toFixed(1);
+        return createResponse(`Error: File too large (exceeds ${maxSizeGB}GB limit, current: ${totalChunks} chunks)`, { status: 413 });
     }
+    
+    // 记录文件大小信息用于调试
+    console.log(`Uploading large file: ${(fileSize / 1024 / 1024).toFixed(2)}MB, ${totalChunks} chunks`);
     
     const chunks = [];
     const uploadedChunks = [];

@@ -108,6 +108,7 @@
         // 检查浏览器是否支持文件夹拖拽
         if (!items[0].webkitGetAsEntry) {
             // 浏览器不支持，让原有的文件上传逻辑处理
+            console.log('[文件夹上传] 浏览器不支持文件夹拖拽，使用原有上传方式');
             return;
         }
 
@@ -121,18 +122,21 @@
                 if (entry) {
                     if (entry.isDirectory) {
                         hasDirectory = true;
+                        console.log(`[文件夹上传] 检测到文件夹: ${entry.name}`);
                     } else if (entry.isFile) {
                         hasFiles = true;
                     }
                 }
             }
         } catch (error) {
-            console.warn('检查文件类型时出错，让原有代码处理:', error);
+            console.warn('[文件夹上传] 检查文件类型时出错，让原有代码处理:', error);
             return; // 出错时让原有代码处理
         }
 
         // 只有检测到文件夹时才拦截处理
         if (hasDirectory) {
+            console.log('[文件夹上传] 开始处理文件夹上传');
+            
             // 阻止事件冒泡，避免原有代码也处理
             e.preventDefault();
             e.stopPropagation();
@@ -146,11 +150,12 @@
             try {
                 await handleFolderUpload(items);
             } catch (error) {
-                console.error('文件夹上传失败:', error);
+                console.error('[文件夹上传] 上传失败:', error);
                 showMessage('文件夹上传失败: ' + error.message, 'error');
             }
         } else {
             // 只有文件，不拦截，让原有的文件上传逻辑处理
+            console.log('[文件夹上传] 检测到单个文件，使用原有上传方式');
             return;
         }
     }

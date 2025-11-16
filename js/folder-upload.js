@@ -422,7 +422,12 @@
     async function uploadFileDirect(file, relativePath, config) {
         const formData = new FormData();
         
-        // 创建包含路径的文件名
+        // 提取文件名和文件夹路径
+        const pathParts = relativePath.split('/');
+        const fileName = pathParts[pathParts.length - 1]; // 只取文件名
+        const folderPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
+        
+        // 文件名包含完整路径（后端会从文件名中提取路径作为备用）
         const fileWithPath = new File([file], relativePath, {
             type: file.type,
             lastModified: file.lastModified
@@ -430,8 +435,8 @@
         
         formData.append('file', fileWithPath);
 
-        // 构建上传 URL
-        const uploadUrl = buildUploadUrl(relativePath, config);
+        // 构建上传 URL，确保传递文件夹路径
+        const uploadUrl = buildUploadUrl(relativePath, folderPath, config);
 
         // 发送上传请求
         const response = await fetch(uploadUrl, {
@@ -543,22 +548,27 @@
                 progressCallback({ current: totalChunks, total: totalChunks, merging: true });
             }
 
+            // 提取文件夹路径
+            const pathParts = relativePath.split('/');
+            const folderPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
+
             const mergeFormData = new FormData();
             mergeFormData.append('uploadId', uploadId);
             mergeFormData.append('totalChunks', totalChunks.toString());
-            mergeFormData.append('originalFileName', relativePath);
+            mergeFormData.append('originalFileName', relativePath); // 完整路径，后端会提取
             mergeFormData.append('originalFileType', file.type || 'application/octet-stream');
 
-            // 设置上传文件夹路径
-            const pathParts = relativePath.split('/');
-            if (pathParts.length > 1) {
-                const folderPath = pathParts.slice(0, -1).join('/');
+            // 设置上传文件夹路径（通过URL参数和FormData双重传递，确保兼容性）
+            if (folderPath) {
                 mergeFormData.append('uploadFolder', folderPath);
             }
 
             const mergeUrl = new URL('/upload', baseUrl);
             mergeUrl.searchParams.set('chunked', 'true');
             mergeUrl.searchParams.set('merge', 'true');
+            if (folderPath) {
+                mergeUrl.searchParams.set('uploadFolder', folderPath);
+            }
             if (config && config.uploadChannel) {
                 mergeUrl.searchParams.set('uploadChannel', config.uploadChannel);
             }
@@ -622,19 +632,26 @@
         throw new Error('合并超时: 等待时间超过 5 分钟');
     }
 
-    function buildUploadUrl(relativePath, config) {
+    function buildUploadUrl(relativePath, folderPath, config) {
         // 从当前页面 URL 获取基础路径
         const baseUrl = window.location.origin;
         const uploadPath = '/upload';
         
         const url = new URL(uploadPath, baseUrl);
         
-        // 设置上传文件夹路径（去掉文件名，只保留目录路径）
-        // 后端会从文件名中提取路径，但我们也通过参数传递以确保兼容性
-        const pathParts = relativePath.split('/');
-        if (pathParts.length > 1) {
-            const folderPath = pathParts.slice(0, -1).join('/');
-            url.searchParams.set('uploadFolder', folderPath);
+        // 设置上传文件夹路径
+        // 如果folderPath已提供，直接使用；否则从relativePath中提取
+        let finalFolderPath = folderPath;
+        if (!finalFolderPath && relativePath) {
+            const pathParts = relativePath.split('/');
+            if (pathParts.length > 1) {
+                finalFolderPath = pathParts.slice(0, -1).join('/');
+            }
+        }
+        
+        // 通过URL参数传递文件夹路径（后端会优先使用此参数）
+        if (finalFolderPath) {
+            url.searchParams.set('uploadFolder', finalFolderPath);
         }
 
         // 如果有上传渠道配置，添加到 URL

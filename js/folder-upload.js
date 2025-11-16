@@ -456,7 +456,17 @@
     async function uploadFileChunked(file, relativePath, config, progressCallback) {
         const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
         const baseUrl = window.location.origin;
+        
+        // 调试信息：检查文件大小和分块数量
+        console.log(`[文件夹上传] 文件: ${relativePath}, 大小: ${fileSizeMB}MB, 分块数: ${totalChunks}`);
+        
+        // 前端检查：如果分块数超过200，提前提示
+        if (totalChunks > 200) {
+            const maxSizeGB = (200 * 20 / 1024).toFixed(1);
+            throw new Error(`文件过大: ${fileSizeMB}MB (${totalChunks}个分块)，超过最大限制 ${maxSizeGB}GB (200个分块)`);
+        }
         
         try {
             // 1. 初始化分块上传

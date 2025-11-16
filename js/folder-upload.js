@@ -681,6 +681,29 @@
         
         const url = new URL(uploadPath, baseUrl);
         
+        // 从当前页面 URL 获取 authCode 和其他参数（保持与原有上传逻辑一致）
+        const currentUrl = new URL(window.location.href);
+        const authCode = currentUrl.searchParams.get('authCode');
+        const serverCompress = currentUrl.searchParams.get('serverCompress');
+        const uploadNameType = currentUrl.searchParams.get('uploadNameType');
+        const autoRetry = currentUrl.searchParams.get('autoRetry');
+        
+        // 传递认证码（如果存在）
+        if (authCode) {
+            url.searchParams.set('authCode', authCode);
+        }
+        
+        // 传递其他上传参数（保持与原有逻辑一致）
+        if (serverCompress !== null) {
+            url.searchParams.set('serverCompress', serverCompress);
+        }
+        if (uploadNameType) {
+            url.searchParams.set('uploadNameType', uploadNameType);
+        }
+        if (autoRetry !== null) {
+            url.searchParams.set('autoRetry', autoRetry);
+        }
+        
         // 设置上传文件夹路径
         // 如果folderPath已提供，直接使用；否则从relativePath中提取
         let finalFolderPath = folderPath;
@@ -714,14 +737,23 @@
 
     function getUploadHeaders() {
         // 获取认证头（如果需要）
-        // 这里返回空对象，实际使用时可能需要添加认证 token
         const headers = {};
         
-        // 尝试从 localStorage 或 cookie 获取 token
-        // 这需要根据实际应用的认证方式调整
+        // 1. 尝试从当前页面 URL 获取 authCode
+        const currentUrl = new URL(window.location.href);
+        const authCode = currentUrl.searchParams.get('authCode');
+        
+        // 2. 尝试从 localStorage 或 cookie 获取 token
         const token = localStorage.getItem('token') || getCookie('token');
+        
+        // 3. 设置 Authorization 头（如果存在 token）
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
+        }
+        
+        // 4. 设置 authCode 头（如果存在）
+        if (authCode) {
+            headers['authCode'] = authCode;
         }
 
         return headers;

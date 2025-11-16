@@ -145,6 +145,11 @@
             const method = this._enhancementMethod;
             const xhr = this;
 
+            // 调试：记录所有上传请求
+            if (method === 'POST' && typeof url === 'string' && url.includes('/upload')) {
+                console.log(`[上传增强] 检测到上传请求: ${method} ${url}`);
+            }
+
             // 检查是否是上传请求
             if (method === 'POST' && typeof url === 'string' && url.includes('/upload') && !url.includes('chunked=true') && !url.includes('initChunked=true')) {
                 // 检查是否是 FormData
@@ -152,53 +157,114 @@
                     const file = data.get('file');
                     if (file && file.size > 20 * 1024 * 1024) {
                         // 文件大于 20MB，使用分块上传
-                        console.log(`[上传增强] 检测到大文件: ${file.name}, 大小: ${(file.size / 1024 / 1024).toFixed(2)}MB，自动转换为分块上传`);
+                        console.log(`[上传增强] 检测到大文件上传请求: ${file.name}, 大小: ${(file.size / 1024 / 1024).toFixed(2)}MB，自动转换为分块上传`);
+                        console.log(`[上传增强] 原始 URL: ${url}`);
+                        
+                        // 阻止原有请求发送
+                        // 不调用 originalXHRSend，直接处理分块上传
+                        
+                        // 设置 readyState 为 LOADING，模拟正在上传
+                        Object.defineProperty(xhr, 'readyState', {
+                            get: function() {
+                                return this._readyState !== undefined ? this._readyState : 1; // LOADING
+                            },
+                            set: function(value) {
+                                this._readyState = value;
+                            },
+                            configurable: true,
+                            enumerable: true
+                        });
+                        xhr._readyState = 1; // LOADING
+                        
+                        // 触发 readystatechange 事件
+                        setTimeout(() => {
+                            if (xhr.onreadystatechange) {
+                                xhr.onreadystatechange(new Event('readystatechange'));
+                            }
+                            if (xhr.addEventListener) {
+                                xhr.dispatchEvent(new Event('readystatechange'));
+                            }
+                        }, 0);
                         
                         // 异步处理分块上传
                         (async () => {
                             try {
+                                console.log(`[上传增强] 开始分块上传流程...`);
                                 const result = await handleChunkedUpload(file, url, data, xhr);
+                                console.log(`[上传增强] 分块上传完成，结果:`, result);
                                 
                                 // 模拟 XHR 响应
+                                xhr._readyState = 4; // DONE
                                 xhr.status = 200;
                                 xhr.statusText = 'OK';
-                                xhr.responseText = typeof result === 'string' ? result : JSON.stringify(result);
-                                xhr.response = xhr.responseText;
+                                const responseText = typeof result === 'string' ? result : JSON.stringify(result);
+                                xhr.responseText = responseText;
+                                xhr.response = responseText;
                                 
-                                // 触发 load 事件
-                                if (xhr.onload) {
-                                    xhr.onload(new Event('load'));
-                                }
-                                if (xhr.addEventListener) {
-                                    xhr.dispatchEvent(new Event('load'));
-                                }
-                                
-                                // 触发 loadend 事件
-                                if (xhr.onloadend) {
-                                    xhr.onloadend(new Event('loadend'));
-                                }
-                                if (xhr.addEventListener) {
-                                    xhr.dispatchEvent(new Event('loadend'));
-                                }
+                                // 触发 readystatechange 事件
+                                setTimeout(() => {
+                                    if (xhr.onreadystatechange) {
+                                        xhr.onreadystatechange(new Event('readystatechange'));
+                                    }
+                                    if (xhr.addEventListener) {
+                                        xhr.dispatchEvent(new Event('readystatechange'));
+                                    }
+                                    
+                                    // 触发 load 事件
+                                    if (xhr.onload) {
+                                        xhr.onload(new Event('load'));
+                                    }
+                                    if (xhr.addEventListener) {
+                                        xhr.dispatchEvent(new Event('load'));
+                                    }
+                                    
+                                    // 触发 loadend 事件
+                                    if (xhr.onloadend) {
+                                        xhr.onloadend(new Event('loadend'));
+                                    }
+                                    if (xhr.addEventListener) {
+                                        xhr.dispatchEvent(new Event('loadend'));
+                                    }
+                                }, 0);
                             } catch (error) {
                                 console.error('[上传增强] 分块上传失败:', error);
                                 
                                 // 模拟错误响应
+                                xhr._readyState = 4; // DONE
                                 xhr.status = 500;
                                 xhr.statusText = 'Internal Server Error';
                                 xhr.responseText = error.message;
                                 xhr.response = xhr.responseText;
                                 
-                                // 触发错误事件
-                                if (xhr.onerror) {
-                                    xhr.onerror(new ErrorEvent('error', { message: error.message }));
-                                }
-                                if (xhr.addEventListener) {
-                                    xhr.dispatchEvent(new ErrorEvent('error', { message: error.message }));
-                                }
+                                // 触发 readystatechange 事件
+                                setTimeout(() => {
+                                    if (xhr.onreadystatechange) {
+                                        xhr.onreadystatechange(new Event('readystatechange'));
+                                    }
+                                    if (xhr.addEventListener) {
+                                        xhr.dispatchEvent(new Event('readystatechange'));
+                                    }
+                                    
+                                    // 触发错误事件
+                                    if (xhr.onerror) {
+                                        xhr.onerror(new ErrorEvent('error', { message: error.message }));
+                                    }
+                                    if (xhr.addEventListener) {
+                                        xhr.dispatchEvent(new ErrorEvent('error', { message: error.message }));
+                                    }
+                                    
+                                    // 触发 loadend 事件
+                                    if (xhr.onloadend) {
+                                        xhr.onloadend(new Event('loadend'));
+                                    }
+                                    if (xhr.addEventListener) {
+                                        xhr.dispatchEvent(new Event('loadend'));
+                                    }
+                                }, 0);
                             }
                         })();
                         
+                        // 不调用 originalXHRSend，直接返回
                         return;
                     }
                 }

@@ -187,53 +187,15 @@
             return;
         }
 
-        // 如果只有文件，等待文件信息读取完成后再决定
-        if (hasFiles && filePromises.length > 0) {
-            // 等待所有文件读取完成
-            await Promise.all(filePromises);
-            
-            // 检查是否有大文件（> 20MB）
-            const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB
-            const hasLargeFile = files.some(f => f.file.size > CHUNK_SIZE);
-            
-            if (hasLargeFile && files.length > 0) {
-                console.log(`[文件夹上传] 检测到大文件 (${files.length}个，最大 ${(Math.max(...files.map(f => f.file.size)) / 1024 / 1024).toFixed(2)}MB)，使用分块上传`);
-                
-                // 阻止事件传播
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-                
-                // 移除拖拽样式（安全地处理）
-                try {
-                    const target = e.currentTarget || e.target;
-                    if (target && target.classList && typeof target.classList.remove === 'function') {
-                        target.classList.remove('drag-over');
-                    }
-                } catch (error) {
-                    // 忽略样式移除错误
-                    console.warn('[文件夹上传] 移除拖拽样式时出错:', error);
-                }
-                
-                // 使用我们的上传逻辑处理大文件
-                try {
-                    showUploadProgress(files.length);
-                    await uploadFilesSequentially(files);
-                } catch (error) {
-                    console.error('[文件夹上传] 大文件上传失败:', error);
-                    showMessage('大文件上传失败: ' + error.message, 'error');
-                }
-                return;
-            } else {
-                // 小文件，让原有的文件上传逻辑处理
-                console.log(`[文件夹上传] 检测到小文件 (${files.length}个，最大 ${files.length > 0 ? (Math.max(...files.map(f => f.file.size)) / 1024 / 1024).toFixed(2) : 0}MB)，使用原有上传方式`);
-                // 不阻止事件，让原有代码处理
-                return;
-            }
+        // 如果只有文件，让原有的文件上传逻辑处理
+        // 大文件会自动通过 upload-enhancement.js 转换为分块上传
+        // 不阻止事件，让原有代码处理
+        if (hasFiles) {
+            return;
         }
         
         // 如果既没有文件夹也没有文件，让原有代码处理
-        console.log('[文件夹上传] 未检测到可处理的文件');
+        // 不输出日志，避免干扰原有功能
     }
 
     async function handleFolderUpload(items) {
@@ -863,9 +825,36 @@
 
     function getUploadConfig() {
         // 尝试从 Vue 应用实例中获取配置
-        // 这里返回默认配置，实际使用时可能需要根据应用调整
+        // 优先从 Vue 应用实例获取，如果没有则从 URL 参数获取，最后使用默认值
+        let uploadChannel = 'telegram'; // 默认使用 telegram 渠道
+        
+        try {
+            // 尝试从 Vue 应用实例获取配置
+            const app = document.querySelector('#app').__vue_app__;
+            if (app && app.config && app.config.globalProperties) {
+                // 尝试从 Vue 实例中获取上传渠道配置
+                const vueInstance = app._instance;
+                if (vueInstance && vueInstance.setupState) {
+                    const uploadChannelFromVue = vueInstance.setupState.uploadChannel || 
+                                                  vueInstance.setupState.currentUploadChannel;
+                    if (uploadChannelFromVue) {
+                        uploadChannel = uploadChannelFromVue;
+                    }
+                }
+            }
+        } catch (error) {
+            // 如果无法从 Vue 获取，忽略错误
+        }
+        
+        // 从 URL 参数获取上传渠道（与原有逻辑一致）
+        const currentUrl = new URL(window.location.href);
+        const urlChannel = currentUrl.searchParams.get('uploadChannel');
+        if (urlChannel) {
+            uploadChannel = urlChannel;
+        }
+        
         return {
-            uploadChannel: 'telegram' // 默认使用 telegram 渠道
+            uploadChannel: uploadChannel
         };
     }
 
@@ -901,14 +890,51 @@
     }
 
     function triggerRefresh() {
-        // 尝试触发 Vue 应用的刷新
-        // 查找可能的刷新方法或事件
-        const event = new CustomEvent('folderUploadComplete');
-        window.dispatchEvent(event);
-        
-        // 如果应用有全局刷新方法，可以调用
-        if (window.refreshFileList) {
-            window.refreshFileList();
+        // 尝试触发 Vue 应用的刷新，与原有上传逻辑保持一致
+        try {
+            // 1. 触发自定义事件（原有上传可能监听的事件）
+            const uploadCompleteEvent = new CustomEvent('uploadComplete', {
+                detail: { source: 'folderUpload' }
+            });
+            window.dispatchEvent(uploadCompleteEvent);
+            
+            // 2. 触发文件夹上传完成事件
+            const folderUploadEvent = new CustomEvent('folderUploadComplete', {
+                detail: { source: 'folderUpload' }
+            });
+            window.dispatchEvent(folderUploadEvent);
+            
+            // 3. 如果应用有全局刷新方法，可以调用
+            if (window.refreshFileList) {
+                window.refreshFileList();
+            }
+            
+            // 4. 尝试从 Vue 应用实例触发刷新
+            try {
+                const app = document.querySelector('#app').__vue_app__;
+                if (app && app._instance) {
+                    const instance = app._instance;
+                    // 尝试调用可能的刷新方法
+                    if (instance.refreshFileList) {
+                        instance.refreshFileList();
+                    } else if (instance.setupState && instance.setupState.refreshFileList) {
+                        instance.setupState.refreshFileList();
+                    } else if (instance.exposed && instance.exposed.refreshFileList) {
+                        instance.exposed.refreshFileList();
+                    }
+                }
+            } catch (error) {
+                // 如果无法从 Vue 获取，忽略错误
+            }
+            
+            // 5. 延迟触发 location.reload() 作为最后手段（可选，通常不需要）
+            // setTimeout(() => {
+            //     if (window.location.search.includes('autoRefresh=true')) {
+            //         window.location.reload();
+            //     }
+            // }, 1000);
+        } catch (error) {
+            console.warn('[文件夹上传] 触发刷新时出错:', error);
         }
     }
 

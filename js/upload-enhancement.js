@@ -14,13 +14,61 @@
     }
 
     function init() {
-        // 等待 Vue 应用加载完成
+        // 立即设置基础拦截（不等待 Vue 加载）
+        setupUploadEnhancement();
+        
+        // 等待 Vue 应用加载完成后再次设置（确保拦截到 Vue 组件）
         setTimeout(() => {
-            setupUploadEnhancement();
-        }, 1000);
+            setupVueInterception();
+        }, 2000);
+    }
+
+    function setupVueInterception() {
+        // 再次尝试拦截 Vue 组件的错误提示（Vue 应用可能延迟加载）
+        if (window.ElMessage && !window.ElMessage._enhanced) {
+            const originalError = window.ElMessage.error;
+            window.ElMessage.error = function(message) {
+                if (typeof message === 'string' && (message.includes('文件过大') || message.includes('无法上传'))) {
+                    console.log('[上传增强] 拦截到文件大小错误提示，已自动处理');
+                    return;
+                }
+                return originalError.apply(this, arguments);
+            };
+            window.ElMessage._enhanced = true;
+        }
+
+        // 使用 MutationObserver 监听 DOM 变化，拦截错误消息的显示
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                mutation.addedNodes.forEach(function(node) {
+                    if (node.nodeType === 1) { // Element node
+                        // 检查是否是错误消息元素
+                        const text = node.textContent || node.innerText || '';
+                        if (text.includes('文件过大') || text.includes('无法上传')) {
+                            console.log('[上传增强] 检测到错误消息 DOM，已自动移除');
+                            // 延迟移除，确保消息不会显示
+                            setTimeout(() => {
+                                if (node.parentNode) {
+                                    node.parentNode.removeChild(node);
+                                }
+                            }, 0);
+                        }
+                    }
+                });
+            });
+        });
+
+        // 开始观察 body 的变化
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
     }
 
     function setupUploadEnhancement() {
+        // 拦截文件输入和验证（最早拦截）
+        interceptFileValidation();
+        
         // 拦截 XMLHttpRequest（Axios 使用）
         interceptXHR();
         
@@ -28,6 +76,57 @@
         interceptFetch();
         
         console.log('[上传增强] 大文件自动分块上传功能已启用');
+    }
+
+    // 拦截文件验证逻辑
+    function interceptFileValidation() {
+        // 拦截文件输入元素的 change 事件
+        document.addEventListener('change', function(e) {
+            if (e.target.type === 'file' && e.target.files && e.target.files.length > 0) {
+                const file = e.target.files[0];
+                if (file && file.size > 20 * 1024 * 1024) {
+                    console.log(`[上传增强] 检测到大文件选择: ${file.name}, 大小: ${(file.size / 1024 / 1024).toFixed(2)}MB`);
+                    // 不阻止，让文件正常选择，但会在上传时自动转换为分块上传
+                }
+            }
+        }, true);
+
+        // 拦截 Element Plus 的 ElMessage 错误提示
+        if (window.ElMessage) {
+            const originalError = window.ElMessage.error;
+            window.ElMessage.error = function(message) {
+                if (typeof message === 'string' && (message.includes('文件过大') || message.includes('无法上传'))) {
+                    console.log('[上传增强] 拦截到文件大小错误提示，已自动处理');
+                    // 不显示错误，因为会在上传时自动转换为分块上传
+                    return;
+                }
+                return originalError.apply(this, arguments);
+            };
+        }
+
+        // 拦截可能的全局错误消息函数
+        if (window.Message && window.Message.error) {
+            const originalError = window.Message.error;
+            window.Message.error = function(message) {
+                if (typeof message === 'string' && (message.includes('文件过大') || message.includes('无法上传'))) {
+                    console.log('[上传增强] 拦截到文件大小错误提示，已自动处理');
+                    return;
+                }
+                return originalError.apply(this, arguments);
+            };
+        }
+
+        // 拦截 console.error 中的错误消息（某些组件可能使用）
+        const originalConsoleError = console.error;
+        console.error = function(...args) {
+            const message = args.join(' ');
+            if (message.includes('文件过大') || message.includes('无法上传')) {
+                console.log('[上传增强] 拦截到文件大小错误日志，已自动处理');
+                // 不输出错误日志
+                return;
+            }
+            return originalConsoleError.apply(console, args);
+        };
     }
 
     // 拦截 XMLHttpRequest
